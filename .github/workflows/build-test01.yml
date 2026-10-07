@@ -1,0 +1,132 @@
+name: Build TEST01 (termux-app v0.119.0-beta.3 + patch 01)
+
+# TEST01 — Compilación reproducible en x86_64 (ubuntu-latest) aplicando el parche 01.
+#
+# Reutiliza la configuración del workflow OFICIAL de v0.119.0-beta.3
+# (`.github/workflows/debug_build.yml`): runs-on ubuntu-latest, actions/checkout@v4,
+# actions/upload-artifact@v4, el Gradle wrapper del propio proyecto (Gradle 7.2),
+# el directorio de salida ./app/build/outputs/apk/debug y las variables de entorno
+# TERMUX_PACKAGE_VARIANT / TERMUX_APK_VERSION_TAG que usa app/build.gradle.
+#
+# Diferencias deliberadas (y por qué):
+#   * JDK fijado a 11 -> el propio proyecto lo declara en jitpack.yml ("openjdk11");
+#     AGP 4.2.2 + Gradle 7.2 se compilan con JDK 11. (El workflow oficial no fija JDK
+#     porque confía en el que trae el runner; aquí lo fijamos para que sea determinista.)
+#   * Android SDK/NDK instalados explícitamente según gradle.properties:
+#       compileSdkVersion=30, ndkVersion=22.1.7171670, build-tools 30.0.3 (default de AGP 4.2.2).
+#   * Se compila UNA sola variante (por defecto apt-android-7), no la matriz de dos.
+#   * NO se fija TERMUX_APP_VERSION_NAME ni TERMUX_APK_VERSION_TAG, para que
+#     versionName quede intacto (0.119.0-beta.3) y los nombres de APK sean deterministas.
+#
+# NO instala nada en ningún dispositivo: sólo genera APKs como artifact del workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_variant:
+        description: "Variante de bootstrap (apt-android-7 = Android 7+; apt-android-5 = Android 5/6)"
+        required: true
+        default: "apt-android-7"
+        type: choice
+        options:
+          - apt-android-7
+          - apt-android-5
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: assembleDebug (x86_64 · JDK 11 · NDK 22.1.7171670)
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_VARIANT: ${{ github.event.inputs.package_variant }}
+    steps:
+      - name: "0) Checkout del repositorio"
+        uses: actions/checkout@v4
+
+      - name: "1) Aplicar el parche 01-reactivar-am-socket.patch"
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="app/src/main/java/com/termux/app/TermuxApplication.java"
+          echo "::group::ANTES (la llamada debe estar comentada)"
+          grep -n "TermuxAmSocketServer.setupTermuxAmSocketServer" "$FILE"
+          grep -n -e '/\*' "$FILE" | head -3 || true
+          echo "::endgroup::"
+
+          git apply --verbose --whitespace=nowarn 01-reactivar-am-socket.patch
+
+          echo "::group::DESPUÉS (la llamada debe estar activa y sin comentar)"
+          grep -n "TermuxAmSocketServer.setupTermuxAmSocketServer" "$FILE"
+          echo "::endgroup::"
+
+          # Verificación dura: la línea NO debe estar rodeada por /* ... */
+          if sed -n '50,66p' "$FILE" | grep -qE '^\s*/\*'; then
+            echo "::error::El parche no se aplicó correctamente (sigue habiendo un bloque comentado)."
+            exit 1
+          fi
+          echo "OK: patch 01 aplicado y verificado."
+
+      - name: "2) JDK 11 (Temurin) — JDK que declara el proyecto"
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: "3) Configurar Android SDK"
+        uses: android-actions/setup-android@v3
+
+      - name: "4) Instalar Android SDK/NDK requeridos (gradle.properties)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-30" \
+            "build-tools;30.0.3" \
+            "ndk;22.1.7171670"
+          echo "::group::Paquetes instalados"
+          sdkmanager --list_installed || true
+          echo "::endgroup::"
+
+      - name: "5) Compilar sólo lo necesario (assembleDebug)"
+        shell: bash
+        env:
+          TERMUX_PACKAGE_VARIANT: ${{ env.PACKAGE_VARIANT }}
+        run: |
+          set -euo pipefail
+          echo "== Entorno =="
+          java -version
+          echo "TERMUX_PACKAGE_VARIANT=$TERMUX_PACKAGE_VARIANT"
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: "6) Recopilar APKs y calcular SHA-256"
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_DIR="./app/build/outputs/apk/debug"
+          echo "== Contenido de $APK_DIR =="
+          ls -la "$APK_DIR"
+          ( cd "$APK_DIR" && sha256sum ./*.apk | tee /tmp/sha256sums.txt )
+          ( cd "$APK_DIR" && sha256sum ./*.apk > sha256sums.txt )
+          {
+            echo "### TEST01 — APKs generados y sus SHA-256"
+            echo ""
+            echo '```'
+            sed 's#\./##' /tmp/sha256sums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "7) Guardar APKs como artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: test01-termux-app-debug-apks
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/output-metadata.json
+            app/build/outputs/apk/debug/sha256sums.txt
