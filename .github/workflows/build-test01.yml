@@ -43,7 +43,7 @@ jobs:
       PACKAGE_VARIANT: ${{ github.event.inputs.package_variant }}
     steps:
       - name: "0) Checkout del repositorio"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: "1) Aplicar el parche 01-reactivar-am-socket.patch"
         shell: bash
