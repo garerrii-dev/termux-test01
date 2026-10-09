@@ -9,9 +9,10 @@ name: Build TEST01 (termux-app v0.119.0-beta.3 + patch 01)
 # TERMUX_PACKAGE_VARIANT / TERMUX_APK_VERSION_TAG que usa app/build.gradle.
 #
 # Diferencias deliberadas (y por qué):
-#   * JDK fijado a 11 -> el propio proyecto lo declara en jitpack.yml ("openjdk11");
-#     AGP 4.2.2 + Gradle 7.2 se compilan con JDK 11. (El workflow oficial no fija JDK
-#     porque confía en el que trae el runner; aquí lo fijamos para que sea determinista.)
+#   * Doble JDK (mínimo necesario): JDK 17 para las Android cmdline-tools modernas
+#     (setup-android@v3 / sdkmanager exigen "JDK 17 or later") y JDK 11 para COMPILAR,
+#     que es el que declara el proyecto en jitpack.yml ("openjdk11") y el que soportan
+#     AGP 4.2.2 + Gradle 7.2. Justo antes de Gradle se vuelve a fijar JDK 11 (paso 4b).
 #   * Android SDK/NDK instalados explícitamente según gradle.properties:
 #       compileSdkVersion=30, ndkVersion=22.1.7171670, build-tools 30.0.3 (default de AGP 4.2.2).
 #   * Se compila UNA sola variante (por defecto apt-android-7), no la matriz de dos.
@@ -68,11 +69,11 @@ jobs:
           fi
           echo "OK: patch 01 aplicado y verificado."
 
-      - name: "2) JDK 11 (Temurin) — JDK que declara el proyecto"
+      - name: "2) JDK 17 (Temurin) — requerido por las Android cmdline-tools modernas"
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "11"
+          java-version: "17"
 
       - name: "3) Configurar Android SDK"
         uses: android-actions/setup-android@v3
@@ -90,6 +91,12 @@ jobs:
           echo "::group::Paquetes instalados"
           sdkmanager --list_installed || true
           echo "::endgroup::"
+
+      - name: "4b) JDK 11 para Gradle"
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
 
       - name: "5) Compilar sólo lo necesario (assembleDebug)"
         shell: bash
